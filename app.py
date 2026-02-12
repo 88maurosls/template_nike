@@ -3,22 +3,21 @@ import re
 import pandas as pd
 import streamlit as st
 import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import column_index_from_string
 from copy import copy
 
 st.set_page_config(page_title="Nike Template Builder", layout="wide")
-
 st.title("Nike Template Builder")
 
 tpl_file = st.file_uploader("Carica TEMPLATE NIKE.xlsx", type=["xlsx"])
 data_file = st.file_uploader("Carica file dati (CO_DF_1202 FILE.xlsx)", type=["xlsx"])
 
 write_zeros = st.checkbox("Scrivi anche gli 0 nelle celle taglia", value=False)
-start_row = st.number_input("Riga di partenza (dopo header)", min_value=2, value=2)
+start_row = st.number_input("Riga di partenza (dopo header)", min_value=2, value=2, step=1)
 
-# =========================
-# UTIL
-# =========================
+SOLD_TO_VALUE = 342694
+SHIP_TO_VALUE = 342861
+
 
 def normalize_size(x):
     if pd.isna(x):
@@ -43,14 +42,23 @@ def copy_row_style(ws, source_row, target_row, max_col):
         dst.alignment = copy(src.alignment)
         dst.protection = copy(src.protection)
 
-def clear_row(ws, row, max_col):
+def clear_row_values(ws, row, max_col):
     for c in range(1, max_col + 1):
         ws.cell(row, c).value = None
 
+def find_header_row(ws, needle="Material Number", max_scan_rows=50):
+    for r in range(1, max_scan_rows + 1):
+        vals = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+        if needle in vals:
+            return r
+    return None
 
-# =========================
-# MAIN
-# =========================
+def locate_column(headers, name):
+    for i, h in enumerate(headers, start=1):
+        if str(h).strip() == name:
+            return i
+    return None
+
 
 if tpl_file and data_file:
 
@@ -58,9 +66,10 @@ if tpl_file and data_file:
 
     required_cols = {"index", "size", "qty"}
     if not required_cols.issubset(df.columns):
-        st.error("Il file dati deve contenere: index, size, qty")
+        st.error(f"Il file dati deve contenere le colonne: {sorted(list(required_cols))}")
         st.stop()
 
+    df = df.copy()
     df["size_norm"] = df["size"].apply(normalize_size)
 
     pivot = (
@@ -77,85 +86,82 @@ if tpl_file and data_file:
     wb = openpyxl.load_workbook(io.BytesIO(tpl_file.getvalue()))
     ws = wb.active
 
-    # Trova header Material Number
-    header_row = None
-    for r in range(1, 30):
-        if "Material Number" in [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]:
-            header_row = r
-            break
-
+    header_row = find_header_row(ws, "Material Number")
     if not header_row:
-        st.error("Non trovo la riga con 'Material Number'")
+        st.error("Non trovo la riga header con 'Material Number'")
         st.stop()
 
     headers = [ws.cell(header_row, c).value for c in range(1, ws.max_column + 1)]
 
-    material_col = None
-    for i, h in enumerate(headers, start=1):
-        if str(h).strip() == "Material Number":
-            material_col = i
-            break
+    material_col = locate_column(headers, "Material Number")
+    sold_to_col = locate_column(headers, "Sold To")
+    ship_to_col = locate_column(headers, "Ship To")
 
     if not material_col:
         st.error("Colonna 'Material Number' non trovata")
         st.stop()
+    if not sold_to_col or not ship_to_col:
+        st.error("Non trovo le colonne 'Sold To' e/o 'Ship To' nel template")
+        st.stop()
 
-    # =========================
-    # RANGE TAGLIE FISSO JU → MP
-    # =========================
-
+    # Range taglie fisso JU -> MP
     col_start = column_index_from_string("JU")
     col_end = column_index_from_string("MP")
 
     size_to_col = {}
-
     for col in range(col_start, col_end + 1):
-        header_value = ws.cell(header_row, col).value
-        if header_value is None:
+        hv = ws.cell(header_row, col).value
+        if hv is None:
             continue
+        key = normalize_size(hv)
+        if key:
+            size_to_col[key] = col
 
-        size_key = normalize_size(header_value)
-        if size_key:
-            size_to_col[size_key] = col
-
-    # =========================
-    # SCRITTURA
-    # =========================
-
+    # Calcola riga di partenza effettiva
     if start_row <= header_row:
         start_row = header_row + 1
 
-    max_col = ws.max_column
-    style_source = start_row
-
     skus = list(pivot.index)
+    max_col = ws.max_column
 
+    # 1) Pulisci Sold To / Ship To sotto l'header (così non rimangono valori "vecchi" nel template)
+    for r in range(header_row + 1, ws.max_row + 1):
+        ws.cell(r, sold_to_col).value = None
+        ws.cell(r, ship_to_col).value = None
+
+    # Se servono più righe del template, estendi
+    required_last_row = start_row + len(skus) - 1
+    if required_last_row > ws.max_row:
+        ws.insert_rows(ws.max_row + 1, amount=(required_last_row - ws.max_row))
+
+    # Riga sorgente stile
+    style_source = start_row if start_row <= ws.max_row else header_row + 1
+
+    # 2) Scrivi righe SKU + SoldTo/ShipTo + quantità taglie
     for i, sku in enumerate(skus):
         r = start_row + i
 
         copy_row_style(ws, style_source, r, max_col)
-        clear_row(ws, r, max_col)
+        clear_row_values(ws, r, max_col)
 
+        ws.cell(r, sold_to_col).value = SOLD_TO_VALUE
+        ws.cell(r, ship_to_col).value = SHIP_TO_VALUE
         ws.cell(r, material_col).value = str(sku).strip()
 
         row_vals = pivot.loc[sku]
-
         for size_key, qty in row_vals.items():
+            size_key = str(size_key).strip()
             if size_key not in size_to_col:
                 continue
-
             if qty == 0 and not write_zeros:
                 continue
+            ws.cell(r, size_to_col[size_key]).value = int(qty)
 
-            col = size_to_col[size_key]
-            ws.cell(r, col).value = int(qty)
-
-    # Output
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
 
-    st.success(f"Creati {len(skus)} SKU con pivot taglie.")
+    st.success(f"OK: {len(skus)} righe compilate. Sold To e Ship To inseriti solo sulle righe degli SKU.")
     st.download_button(
         "Scarica Excel risultante",
         data=output.getvalue(),
@@ -164,5 +170,4 @@ if tpl_file and data_file:
     )
 
 else:
-    st.info("Carica entrambi i file.")
-
+    st.info("Carica entrambi i file per generare l'Excel.")
