@@ -66,8 +66,7 @@ pivot = (
         index="index",
         columns="size_key",
         values="qty",
-        aggfunc="sum",
-        fill_value=0
+        aggfunc="sum"
     )
 )
 
