@@ -39,7 +39,7 @@ with col2:
 # FUNZIONI
 # =========================
 def clean_key(x) -> str:
-    """Chiave robusta per matching taglie (XL, 3.5, 1.5C, ecc)"""
+    """Chiave robusta per matching taglie (M, L, XL, 3.5, 1.5C, ecc)."""
     if x is None:
         return ""
     return str(x).strip().upper().replace(",", ".")
@@ -58,19 +58,15 @@ def locate_column(headers, name: str):
     return None
 
 def load_template_workbook():
-    # Streamlit Cloud: path relativo alla repo
     if os.path.exists(TEMPLATE_PATH):
         return openpyxl.load_workbook(TEMPLATE_PATH)
 
-    # fallback: stessa directory di app.py
     here = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.join(here, TEMPLATE_PATH)
     if os.path.exists(candidate):
         return openpyxl.load_workbook(candidate)
 
-    raise FileNotFoundError(
-        f"Template non trovato. Atteso '{TEMPLATE_PATH}' nella stessa cartella di app.py."
-    )
+    raise FileNotFoundError(f"Template non trovato. Atteso '{TEMPLATE_PATH}' nella stessa cartella di app.py.")
 
 def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
     """
@@ -102,20 +98,31 @@ def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
             dst.protection = copy(src.protection)
 
 def clear_only_needed_cells(ws, r, sold_to_col, ship_to_col, material_col, size_col_start, size_col_end):
-    """
-    Pulisce SOLO i valori delle celle gestite (non tocca stili).
-    """
+    """Pulisce SOLO i valori delle celle gestite (non tocca stili)."""
     ws.cell(r, sold_to_col).value = None
     ws.cell(r, ship_to_col).value = None
     ws.cell(r, material_col).value = None
     for c in range(size_col_start, size_col_end + 1):
         ws.cell(r, c).value = None
 
+def get_size_header_value(ws, header_row, col):
+    """
+    Header taglie può essere su 2 righe:
+    - prova header_row
+    - se vuoto, prova header_row + 1
+    """
+    v1 = ws.cell(header_row, col).value
+    k1 = clean_key(v1)
+    if k1:
+        return k1
+    v2 = ws.cell(header_row + 1, col).value
+    k2 = clean_key(v2)
+    return k2
+
 def hide_leading_trailing_empty_by_sheet_values(ws, start_row, n_rows, size_start, size_end):
     """
     Nasconde SOLO colonne completamente vuote prima e dopo, basandosi sui valori REALI scritti nel foglio.
-    Non usa pivot, quindi non può nascondere colonne piene per errori di matching.
-    Le colonne vuote in mezzo NON vengono nascoste.
+    Non nasconde i buchi in mezzo.
     """
     ordered_cols = list(range(size_start, size_end + 1))
     col_has_data = []
@@ -136,11 +143,9 @@ def hide_leading_trailing_empty_by_sheet_values(ws, start_row, n_rows, size_star
     first = idx[0]
     last = idx[-1]
 
-    # nasconde solo PRIMA
     for i in range(0, first):
         ws.column_dimensions[get_column_letter(ordered_cols[i])].hidden = True
 
-    # nasconde solo DOPO
     for i in range(last + 1, len(ordered_cols)):
         ws.column_dimensions[get_column_letter(ordered_cols[i])].hidden = True
 
@@ -181,7 +186,6 @@ except Exception as e:
 
 ws = wb.active
 
-# header
 header_row = find_header_row(ws, "Material Number")
 if not header_row:
     st.error("Non trovo la riga header con 'Material Number' nel template.")
@@ -200,14 +204,13 @@ if not sold_to_col or not ship_to_col:
     st.error("Colonne 'Sold To' e/o 'Ship To' non trovate nel template.")
     st.stop()
 
-# range taglie fisso AN -> MP
 size_col_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_col_end = column_index_from_string(SIZE_COL_END_LETTER)
 
-# mappa template: taglia -> colonna (prima occorrenza)
+# mappa template: taglia -> colonna (prima occorrenza) usando header a 2 righe
 key_to_col = {}
 for col in range(size_col_start, size_col_end + 1):
-    key = clean_key(ws.cell(header_row, col).value)
+    key = get_size_header_value(ws, header_row, col)
     if key and key not in key_to_col:
         key_to_col[key] = col
 
@@ -219,10 +222,8 @@ if start_row <= header_row:
 skus = list(pivot.index)
 max_col = ws.max_column
 
-# riga modello per stile
 template_row_for_style = start_row if start_row <= ws.max_row else header_row + 1
 
-# assicura righe (copiando stile)
 ensure_rows_with_style(
     ws=ws,
     template_row=template_row_for_style,
@@ -231,7 +232,7 @@ ensure_rows_with_style(
     max_col=max_col
 )
 
-# warning: taglie nel pivot non presenti nel template (solo informativo)
+# warning: taglie presenti nei dati ma non nel template (solo informativo)
 missing_sizes = [c for c in pivot.columns if c and c not in key_to_col]
 if missing_sizes:
     st.warning("Taglie nel file dati non trovate nel range AN-MP del template: " + ", ".join(missing_sizes))
@@ -240,7 +241,6 @@ if missing_sizes:
 for i, sku in enumerate(skus):
     r = start_row + i
 
-    # pulisci solo valori gestiti
     clear_only_needed_cells(
         ws, r,
         sold_to_col=sold_to_col,
@@ -250,19 +250,17 @@ for i, sku in enumerate(skus):
         size_col_end=size_col_end
     )
 
-    # valori fissi
     ws.cell(r, sold_to_col).value = SOLD_TO_VALUE
     ws.cell(r, ship_to_col).value = SHIP_TO_VALUE
     ws.cell(r, material_col).value = str(sku).strip()
 
-    # quantità taglie
     for size_key, qty in pivot.loc[sku].items():
         if qty == 0 and not write_zeros:
             continue
         if size_key in key_to_col:
             ws.cell(r, key_to_col[size_key]).value = int(qty)
 
-# hide colonne vuote esterne basandosi sul foglio (non sul pivot)
+# hide colonne vuote esterne basandosi sul foglio
 hide_leading_trailing_empty_by_sheet_values(
     ws=ws,
     start_row=start_row,
@@ -271,12 +269,11 @@ hide_leading_trailing_empty_by_sheet_values(
     size_end=size_col_end
 )
 
-# output
 out = io.BytesIO()
 wb.save(out)
 out.seek(0)
 
-st.success(f"Creato file con {len(skus)} SKU. Range taglie AN-MP, hide esterni corretto.")
+st.success(f"Creato file con {len(skus)} SKU. Compila anche M/L/XL (header a 2 righe) e hide esterni corretto.")
 st.download_button(
     "Scarica Excel risultante",
     data=out.getvalue(),
