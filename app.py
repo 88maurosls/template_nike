@@ -1,11 +1,10 @@
 import io
 import os
-from copy import copy
-
 import pandas as pd
 import streamlit as st
 import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+from copy import copy
+from openpyxl.utils import column_index_from_string
 
 # =========================
 # STREAMLIT
@@ -47,51 +46,18 @@ def find_header_row(ws, needle="Material Number", max_scan_rows=50):
             return r
     return None
 
-def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
-    last_needed = start_row + n_rows - 1
-    if last_needed <= ws.max_row:
-        return
-
-    rows_to_add = last_needed - ws.max_row
-    insert_at = ws.max_row + 1
-    ws.insert_rows(insert_at, amount=rows_to_add)
-
-    src_height = ws.row_dimensions[template_row].height
-    for r in range(insert_at, insert_at + rows_to_add):
-        ws.row_dimensions[r].height = src_height
-        for c in range(1, max_col + 1):
-            src = ws.cell(template_row, c)
-            dst = ws.cell(r, c)
-            if src.has_style:
-                dst._style = copy(src._style)
-            dst.font = copy(src.font)
-            dst.border = copy(src.border)
-            dst.fill = copy(src.fill)
-            dst.number_format = src.number_format
-            dst.alignment = copy(src.alignment)
-            dst.protection = copy(src.protection)
-
-def set_bold(cell):
-    f = copy(cell.font)
-    f.bold = True
-    cell.font = f
-
-def snapshot_column_widths(ws):
-    """
-    Salva le larghezze colonna presenti nel template.
-    """
-    widths = {}
-    for k, dim in ws.column_dimensions.items():
-        if dim.width is not None:
-            widths[k] = dim.width
-    return widths
-
-def apply_column_widths(ws, widths: dict):
-    """
-    Ripristina le larghezze colonna sul file finale.
-    """
-    for col_letter, w in widths.items():
-        ws.column_dimensions[col_letter].width = w
+def copy_row_style(ws, source_row, target_row):
+    for col in range(1, ws.max_column + 1):
+        src = ws.cell(source_row, col)
+        dst = ws.cell(target_row, col)
+        if src.has_style:
+            dst._style = copy(src._style)
+        dst.font = copy(src.font)
+        dst.border = copy(src.border)
+        dst.fill = copy(src.fill)
+        dst.number_format = src.number_format
+        dst.alignment = copy(src.alignment)
+        dst.protection = copy(src.protection)
 
 # =========================
 # MAIN
@@ -124,12 +90,6 @@ if not os.path.exists(TEMPLATE_PATH):
     st.error("Template non trovato.")
     st.stop()
 
-# 1) carico template una volta per fotografare le widths (non lo modifico)
-wb_tpl = openpyxl.load_workbook(TEMPLATE_PATH)
-ws_tpl = wb_tpl.active
-template_widths = snapshot_column_widths(ws_tpl)
-
-# 2) carico di nuovo quello che andrò a scrivere (questo lo modifico)
 wb = openpyxl.load_workbook(TEMPLATE_PATH)
 ws = wb.active
 
@@ -150,10 +110,6 @@ size_end = column_index_from_string(SIZE_COL_END_LETTER)
 start_row = header_row + 1
 template_style_row = start_row
 
-# assicura righe e copia stile
-max_col = ws.max_column
-ensure_rows_with_style(ws, template_style_row, start_row, len(pivot.index), max_col)
-
 # mapping taglie
 key_to_col = {}
 for col in range(size_start, size_end + 1):
@@ -161,34 +117,21 @@ for col in range(size_start, size_end + 1):
     if key:
         key_to_col[key] = col
 
-# scrittura dati
+# scrittura dati con stile copiato
 for i, sku in enumerate(pivot.index):
     r = start_row + i
 
-    c = ws.cell(r, sold_to_col)
-    c.value = SOLD_TO_VALUE
-    set_bold(c)
+    if r > template_style_row:
+        copy_row_style(ws, template_style_row, r)
 
-    c = ws.cell(r, ship_to_col)
-    c.value = SHIP_TO_VALUE
-    set_bold(c)
-
-    c = ws.cell(r, material_col)
-    c.value = str(sku)
-    set_bold(c)
+    ws.cell(r, sold_to_col).value = SOLD_TO_VALUE
+    ws.cell(r, ship_to_col).value = SHIP_TO_VALUE
+    ws.cell(r, material_col).value = str(sku)
 
     for size_key, qty in pivot.loc[sku].items():
-        if size_key in key_to_col and pd.notna(qty) and qty > 0:
-            c = ws.cell(r, key_to_col[size_key])
-            c.value = int(qty)
-            set_bold(c)
-
-# colonne taglie sempre visibili
-for col in range(size_start, size_end + 1):
-    ws.column_dimensions[get_column_letter(col)].hidden = False
-
-# RIPRISTINA LE LARGHEZZE DEL TEMPLATE
-apply_column_widths(ws, template_widths)
+        if size_key in key_to_col:
+            if pd.notna(qty) and qty > 0:
+                ws.cell(r, key_to_col[size_key]).value = int(qty)
 
 # output
 out = io.BytesIO()
