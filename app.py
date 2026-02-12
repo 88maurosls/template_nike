@@ -84,7 +84,6 @@ if not header_row:
     st.error("Header non trovato nel template.")
     st.stop()
 
-# colonne principali
 headers = [ws.cell(header_row, c).value for c in range(1, ws.max_column + 1)]
 
 material_col = headers.index("Material Number") + 1
@@ -94,7 +93,6 @@ ship_to_col = headers.index("Ship To") + 1
 size_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_end = column_index_from_string(SIZE_COL_END_LETTER)
 
-# riga di partenza automatica
 start_row = header_row + 1
 
 # mapping taglie template
@@ -114,7 +112,8 @@ for i, sku in enumerate(pivot.index):
 
     for size_key, qty in pivot.loc[sku].items():
         if size_key in key_to_col:
-            ws.cell(r, key_to_col[size_key]).value = int(qty)
+            if pd.notna(qty) and qty > 0:
+                ws.cell(r, key_to_col[size_key]).value = int(qty)
 
 # output
 out = io.BytesIO()
