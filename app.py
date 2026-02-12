@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 import openpyxl
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 # =========================
 # STREAMLIT
@@ -117,7 +117,13 @@ for i, sku in enumerate(pivot.index):
         if size_key in key_to_col:
             ws.cell(r, key_to_col[size_key]).value = int(qty)
 
-# output
+# forza visibilità colonne AN -> MP
+for col in range(size_start, size_end + 1):
+    ws.column_dimensions[get_column_letter(col)].hidden = False
+
+# =========================
+# OUTPUT
+# =========================
 out = io.BytesIO()
 wb.save(out)
 out.seek(0)
