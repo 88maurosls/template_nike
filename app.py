@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 import openpyxl
+from copy import copy
 from openpyxl.utils import column_index_from_string
 
 # =========================
@@ -44,6 +45,19 @@ def find_header_row(ws, needle="Material Number", max_scan_rows=50):
         if needle in row_values:
             return r
     return None
+
+def copy_row_style(ws, source_row, target_row):
+    for col in range(1, ws.max_column + 1):
+        src = ws.cell(source_row, col)
+        dst = ws.cell(target_row, col)
+        if src.has_style:
+            dst._style = copy(src._style)
+        dst.font = copy(src.font)
+        dst.border = copy(src.border)
+        dst.fill = copy(src.fill)
+        dst.number_format = src.number_format
+        dst.alignment = copy(src.alignment)
+        dst.protection = copy(src.protection)
 
 # =========================
 # MAIN
@@ -94,17 +108,21 @@ size_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_end = column_index_from_string(SIZE_COL_END_LETTER)
 
 start_row = header_row + 1
+template_style_row = start_row
 
-# mapping taglie template
+# mapping taglie
 key_to_col = {}
 for col in range(size_start, size_end + 1):
     key = clean_key(ws.cell(header_row, col).value)
     if key:
         key_to_col[key] = col
 
-# scrittura dati
+# scrittura dati con stile copiato
 for i, sku in enumerate(pivot.index):
     r = start_row + i
+
+    if r > template_style_row:
+        copy_row_style(ws, template_style_row, r)
 
     ws.cell(r, sold_to_col).value = SOLD_TO_VALUE
     ws.cell(r, ship_to_col).value = SHIP_TO_VALUE
