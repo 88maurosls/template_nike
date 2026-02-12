@@ -1,5 +1,6 @@
 import io
 import re
+import os
 import pandas as pd
 import streamlit as st
 import openpyxl
@@ -9,15 +10,14 @@ from copy import copy
 st.set_page_config(page_title="Nike Template Builder", layout="wide")
 st.title("Nike Template Builder")
 
-tpl_file = st.file_uploader("Carica TEMPLATE NIKE.xlsx", type=["xlsx"])
-data_file = st.file_uploader("Carica file dati (CO_DF_1202 FILE.xlsx)", type=["xlsx"])
-
-write_zeros = st.checkbox("Scrivi anche gli 0 nelle celle taglia", value=False)
-start_row = st.number_input("Riga di partenza (dopo header)", min_value=2, value=2, step=1)
-
+# === CONFIG ===
+TEMPLATE_PATH = "TEMPLATE NIKE.xlsx"   # deve essere nella repo (stessa cartella di app.py)
 SOLD_TO_VALUE = 342694
 SHIP_TO_VALUE = 342861
 
+data_file = st.file_uploader("Carica file dati (CO_DF_1202 FILE.xlsx)", type=["xlsx"])
+write_zeros = st.checkbox("Scrivi anche gli 0 nelle celle taglia", value=False)
+start_row = st.number_input("Riga di partenza (dopo header)", min_value=2, value=2, step=1)
 
 def normalize_size(x):
     if pd.isna(x):
@@ -59,9 +59,20 @@ def locate_column(headers, name):
             return i
     return None
 
+def load_template_workbook():
+    # prova prima path relativo (Streamlit Cloud)
+    if os.path.exists(TEMPLATE_PATH):
+        return openpyxl.load_workbook(TEMPLATE_PATH)
+    # fallback: prova nella stessa dir di app.py
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(here, TEMPLATE_PATH)
+    if os.path.exists(candidate):
+        return openpyxl.load_workbook(candidate)
+    raise FileNotFoundError(
+        f"Template non trovato. Mi aspettavo '{TEMPLATE_PATH}' nella repo (stessa cartella di app.py)."
+    )
 
-if tpl_file and data_file:
-
+if data_file:
     df = pd.read_excel(data_file)
 
     required_cols = {"index", "size", "qty"}
@@ -83,7 +94,12 @@ if tpl_file and data_file:
         .sort_index()
     )
 
-    wb = openpyxl.load_workbook(io.BytesIO(tpl_file.getvalue()))
+    try:
+        wb = load_template_workbook()
+    except Exception as e:
+        st.error(str(e))
+        st.stop()
+
     ws = wb.active
 
     header_row = find_header_row(ws, "Material Number")
@@ -104,7 +120,7 @@ if tpl_file and data_file:
         st.error("Non trovo le colonne 'Sold To' e/o 'Ship To' nel template")
         st.stop()
 
-    # Range taglie fisso JU -> MP
+    # === Range taglie fisso JU -> MP ===
     col_start = column_index_from_string("JU")
     col_end = column_index_from_string("MP")
 
@@ -117,27 +133,24 @@ if tpl_file and data_file:
         if key:
             size_to_col[key] = col
 
-    # Calcola riga di partenza effettiva
     if start_row <= header_row:
         start_row = header_row + 1
 
     skus = list(pivot.index)
     max_col = ws.max_column
 
-    # 1) Pulisci Sold To / Ship To sotto l'header (così non rimangono valori "vecchi" nel template)
+    # Pulisci Sold To / Ship To sotto header (così non ti ritrovi valori vecchi)
     for r in range(header_row + 1, ws.max_row + 1):
         ws.cell(r, sold_to_col).value = None
         ws.cell(r, ship_to_col).value = None
 
-    # Se servono più righe del template, estendi
+    # Estendi righe se serve
     required_last_row = start_row + len(skus) - 1
     if required_last_row > ws.max_row:
         ws.insert_rows(ws.max_row + 1, amount=(required_last_row - ws.max_row))
 
-    # Riga sorgente stile
     style_source = start_row if start_row <= ws.max_row else header_row + 1
 
-    # 2) Scrivi righe SKU + SoldTo/ShipTo + quantità taglie
     for i, sku in enumerate(skus):
         r = start_row + i
 
@@ -161,13 +174,12 @@ if tpl_file and data_file:
     wb.save(output)
     output.seek(0)
 
-    st.success(f"OK: {len(skus)} righe compilate. Sold To e Ship To inseriti solo sulle righe degli SKU.")
+    st.success(f"OK: {len(skus)} righe compilate usando il template dalla directory.")
     st.download_button(
         "Scarica Excel risultante",
         data=output.getvalue(),
         file_name="NIKE_TEMPLATE_FILLED.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
 else:
-    st.info("Carica entrambi i file per generare l'Excel.")
+    st.info("Carica il file dati per generare l'Excel.")
