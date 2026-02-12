@@ -29,12 +29,6 @@ data_file = st.file_uploader(
     type=["xlsx"]
 )
 
-col1, col2 = st.columns(2)
-with col1:
-    write_zeros = st.checkbox("Scrivi anche gli 0 nelle celle taglia", value=False)
-with col2:
-    start_row = st.number_input("Riga di partenza (dopo header)", min_value=2, value=2)
-
 # =========================
 # FUNZIONI
 # =========================
@@ -91,7 +85,7 @@ if not header_row:
     st.error("Header non trovato nel template.")
     st.stop()
 
-# individua colonne principali
+# colonne principali
 headers = [ws.cell(header_row, c).value for c in range(1, ws.max_column + 1)]
 
 material_col = headers.index("Material Number") + 1
@@ -101,9 +95,8 @@ ship_to_col = headers.index("Ship To") + 1
 size_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_end = column_index_from_string(SIZE_COL_END_LETTER)
 
-start_row = int(start_row)
-if start_row <= header_row:
-    start_row = header_row + 1
+# riga di partenza automatica
+start_row = header_row + 1
 
 # mapping taglie template
 key_to_col = {}
@@ -122,8 +115,6 @@ for i, sku in enumerate(pivot.index):
 
     for size_key, qty in pivot.loc[sku].items():
         if size_key in key_to_col:
-            if qty == 0 and not write_zeros:
-                continue
             ws.cell(r, key_to_col[size_key]).value = int(qty)
 
 # output
