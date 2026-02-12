@@ -48,9 +48,6 @@ def find_header_row(ws, needle="Material Number", max_scan_rows=50):
     return None
 
 def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
-    """
-    Se servono più righe di quelle presenti, le crea e copia lo stile dal template_row.
-    """
     last_needed = start_row + n_rows - 1
     if last_needed <= ws.max_row:
         return
@@ -75,12 +72,26 @@ def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
             dst.protection = copy(src.protection)
 
 def set_bold(cell):
-    """
-    Forza bold sulla cella mantenendo il resto (font name, size, ecc).
-    """
     f = copy(cell.font)
     f.bold = True
     cell.font = f
+
+def snapshot_column_widths(ws):
+    """
+    Salva le larghezze colonna presenti nel template.
+    """
+    widths = {}
+    for k, dim in ws.column_dimensions.items():
+        if dim.width is not None:
+            widths[k] = dim.width
+    return widths
+
+def apply_column_widths(ws, widths: dict):
+    """
+    Ripristina le larghezze colonna sul file finale.
+    """
+    for col_letter, w in widths.items():
+        ws.column_dimensions[col_letter].width = w
 
 # =========================
 # MAIN
@@ -113,6 +124,12 @@ if not os.path.exists(TEMPLATE_PATH):
     st.error("Template non trovato.")
     st.stop()
 
+# 1) carico template una volta per fotografare le widths (non lo modifico)
+wb_tpl = openpyxl.load_workbook(TEMPLATE_PATH)
+ws_tpl = wb_tpl.active
+template_widths = snapshot_column_widths(ws_tpl)
+
+# 2) carico di nuovo quello che andrò a scrivere (questo lo modifico)
 wb = openpyxl.load_workbook(TEMPLATE_PATH)
 ws = wb.active
 
@@ -131,9 +148,9 @@ size_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_end = column_index_from_string(SIZE_COL_END_LETTER)
 
 start_row = header_row + 1
-template_style_row = start_row  # riga “modello” nel template
+template_style_row = start_row
 
-# assicura righe sufficienti e copia stile
+# assicura righe e copia stile
 max_col = ws.max_column
 ensure_rows_with_style(ws, template_style_row, start_row, len(pivot.index), max_col)
 
@@ -166,9 +183,12 @@ for i, sku in enumerate(pivot.index):
             c.value = int(qty)
             set_bold(c)
 
-# forza visibilità colonne taglie AM -> DR
+# colonne taglie sempre visibili
 for col in range(size_start, size_end + 1):
     ws.column_dimensions[get_column_letter(col)].hidden = False
+
+# RIPRISTINA LE LARGHEZZE DEL TEMPLATE
+apply_column_widths(ws, template_widths)
 
 # output
 out = io.BytesIO()
