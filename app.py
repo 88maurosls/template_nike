@@ -21,7 +21,7 @@ TEMPLATE_PATH = "TEMPLATE NIKE.xlsx"   # nella repo (stessa cartella di app.py)
 SOLD_TO_VALUE = 342694
 SHIP_TO_VALUE = 342861
 
-SIZE_COL_START_LETTER = "JU"
+SIZE_COL_START_LETTER = "AN"
 SIZE_COL_END_LETTER = "MP"
 
 # =========================
