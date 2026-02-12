@@ -6,7 +6,7 @@ from copy import copy
 import pandas as pd
 import streamlit as st
 import openpyxl
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 # =========================
 # STREAMLIT
@@ -21,7 +21,8 @@ TEMPLATE_PATH = "TEMPLATE NIKE.xlsx"   # nella repo (stessa cartella di app.py)
 SOLD_TO_VALUE = 342694
 SHIP_TO_VALUE = 342861
 
-SIZE_COL_START_LETTER = "JU"
+# RANGE TAGLIE: AN -> MP
+SIZE_COL_START_LETTER = "AN"
 SIZE_COL_END_LETTER = "MP"
 
 # =========================
@@ -91,7 +92,6 @@ def ensure_rows_with_style(ws, template_row, start_row, n_rows, max_col):
     insert_at = ws.max_row + 1
     ws.insert_rows(insert_at, amount=rows_to_add)
 
-    # copia altezza e stile cella per cella
     src_h = ws.row_dimensions[template_row].height
     for r in range(insert_at, insert_at + rows_to_add):
         ws.row_dimensions[r].height = src_h
@@ -118,6 +118,54 @@ def clear_only_needed_cells(ws, r, sold_to_col, ship_to_col, material_col, size_
     for c in range(size_col_start, size_col_end + 1):
         ws.cell(r, c).value = None
 
+def hide_leading_trailing_empty_size_cols(ws, header_row, size_col_start, size_col_end, size_to_col, pivot):
+    """
+    Nasconde solo:
+    - colonne vuote PRIMA della prima colonna con qty > 0
+    - colonne vuote DOPO l'ultima colonna con qty > 0
+    Non nasconde mai i "buchi" in mezzo.
+    """
+    # costruisci lista ordinata delle colonne taglie nel range
+    ordered_cols = list(range(size_col_start, size_col_end + 1))
+
+    # per ogni colonna nel range, prendi la size_key da header e somma le qty dal pivot
+    col_has_data = []
+    for col in ordered_cols:
+        header_val = ws.cell(header_row, col).value
+        size_key = normalize_size(header_val)
+        if not size_key:
+            col_has_data.append(False)
+            continue
+
+        if size_key in pivot.columns:
+            total = pivot[size_key].sum()
+            col_has_data.append(total > 0)
+        else:
+            col_has_data.append(False)
+
+    # trova primo e ultimo True
+    if any(col_has_data):
+        first = col_has_data.index(True)
+        last = len(col_has_data) - 1 - col_has_data[::-1].index(True)
+
+        # nascondi prima
+        for i in range(0, first):
+            letter = get_column_letter(ordered_cols[i])
+            ws.column_dimensions[letter].hidden = True
+
+        # mostra blocco centrale (anche se vuoto in mezzo, lo lasciamo visibile)
+        for i in range(first, last + 1):
+            letter = get_column_letter(ordered_cols[i])
+            ws.column_dimensions[letter].hidden = False
+
+        # nascondi dopo
+        for i in range(last + 1, len(ordered_cols)):
+            letter = get_column_letter(ordered_cols[i])
+            ws.column_dimensions[letter].hidden = True
+    else:
+        # se non c'è nessuna qty > 0, non tocchiamo niente (scelta conservativa)
+        pass
+
 # =========================
 # MAIN
 # =========================
@@ -125,7 +173,6 @@ if not data_file:
     st.info("Carica il file dati per generare l'Excel.")
     st.stop()
 
-# leggi dati
 df = pd.read_excel(data_file)
 
 required_cols = {"index", "size", "qty"}
@@ -136,7 +183,6 @@ if not required_cols.issubset(df.columns):
 df = df.copy()
 df["size_norm"] = df["size"].apply(normalize_size)
 
-# pivot
 pivot = (
     df.pivot_table(
         index="index",
@@ -148,7 +194,6 @@ pivot = (
     .sort_index()
 )
 
-# carica template
 try:
     wb = load_template_workbook()
 except Exception as e:
@@ -157,7 +202,6 @@ except Exception as e:
 
 ws = wb.active
 
-# header
 header_row = find_header_row(ws, "Material Number")
 if not header_row:
     st.error("Non trovo la riga header con 'Material Number' nel template.")
@@ -176,7 +220,7 @@ if not sold_to_col or not ship_to_col:
     st.error("Colonne 'Sold To' e/o 'Ship To' non trovate nel template.")
     st.stop()
 
-# range taglie fisso JU -> MP
+# range taglie fisso AN -> MP
 size_col_start = column_index_from_string(SIZE_COL_START_LETTER)
 size_col_end = column_index_from_string(SIZE_COL_END_LETTER)
 
@@ -189,7 +233,6 @@ for col in range(size_col_start, size_col_end + 1):
     if key:
         size_to_col[key] = col
 
-# start row effettiva
 start_row = int(start_row)
 if start_row <= header_row:
     start_row = header_row + 1
@@ -197,10 +240,8 @@ if start_row <= header_row:
 skus = list(pivot.index)
 max_col = ws.max_column
 
-# riga modello per stile (la prima riga dove scriviamo, se esiste; altrimenti subito dopo header)
 template_row_for_style = start_row if start_row <= ws.max_row else header_row + 1
 
-# assicura che ci siano abbastanza righe mantenendo layout
 ensure_rows_with_style(
     ws=ws,
     template_row=template_row_for_style,
@@ -209,16 +250,13 @@ ensure_rows_with_style(
     max_col=max_col
 )
 
-# segnala taglie mancanti (solo warning, non blocca)
 missing_sizes = [s for s in pivot.columns if str(s).strip() and str(s).strip() not in size_to_col]
 if missing_sizes:
-    st.warning("Taglie presenti nel file dati ma NON trovate tra JU e MP nel template: " + ", ".join(map(str, missing_sizes)))
+    st.warning("Taglie presenti nel file dati ma NON trovate tra AN e MP nel template: " + ", ".join(map(str, missing_sizes)))
 
-# scrittura righe
 for i, sku in enumerate(skus):
     r = start_row + i
 
-    # pulisci solo celle gestite
     clear_only_needed_cells(
         ws, r,
         sold_to_col=sold_to_col,
@@ -228,7 +266,6 @@ for i, sku in enumerate(skus):
         size_col_end=size_col_end
     )
 
-    # scrivi valori
     ws.cell(r, sold_to_col).value = SOLD_TO_VALUE
     ws.cell(r, ship_to_col).value = SHIP_TO_VALUE
     ws.cell(r, material_col).value = str(sku).strip()
@@ -244,12 +281,21 @@ for i, sku in enumerate(skus):
             continue
         ws.cell(r, size_to_col[size_key]).value = int(qty)
 
-# output
+# nascondi colonne taglia vuote prima e dopo (non quelle in mezzo)
+hide_leading_trailing_empty_size_cols(
+    ws=ws,
+    header_row=header_row,
+    size_col_start=size_col_start,
+    size_col_end=size_col_end,
+    size_to_col=size_to_col,
+    pivot=pivot
+)
+
 out = io.BytesIO()
 wb.save(out)
 out.seek(0)
 
-st.success(f"Creato file con {len(skus)} SKU. Layout preservato dal template.")
+st.success(f"Creato file con {len(skus)} SKU. Range taglie AN-MP e colonne esterne vuote nascoste.")
 st.download_button(
     "Scarica Excel risultante",
     data=out.getvalue(),
