@@ -42,20 +42,18 @@ def clean_key(x):
     if isinstance(x, (datetime.datetime, datetime.date)):
         m = x.month
         d = x.day
-        # 05 -> .5
         if d == 5:
             return f"{m}.5"
-        # fallback generico (se mai capitasse)
         return f"{m}.{d}".replace(",", ".")
 
-    # numeri (int/float)
+    # numeri
     if isinstance(x, (int, float)):
         if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
             return ""
-        s = f"{x:.2f}".rstrip("0").rstrip(".")  # 7.0 -> "7", 7.5 -> "7.5"
+        s = f"{x:.2f}".rstrip("0").rstrip(".")
         return s.strip().upper().replace(",", ".")
 
-    # stringhe e altro
+    # stringhe
     return str(x).strip().upper().replace(",", ".")
 
 def find_header_row(ws, needle="Material Number", max_scan_rows=50):
