@@ -53,6 +53,8 @@ if not data_file:
     st.stop()
 
 df = pd.read_excel(data_file)
+# normalizza nomi colonne (case insensitive)
+df.columns = [c.strip().lower() for c in df.columns]
 
 required = {"index", "size", "qty"}
 if not required.issubset(df.columns):
